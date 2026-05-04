@@ -25,6 +25,10 @@ channels:
         $ref: '#/components/messages/ping_message'
       pong_message:
         $ref: '#/components/messages/pong_message'
+      user_joined_notification:
+        $ref: '#/components/messages/user_joined_notification'
+      user_left_notification:
+        $ref: '#/components/messages/user_left_notification'
     tags:
     - name: chat
     - name: showcase
@@ -181,6 +185,22 @@ operations:
     summary: ''
     messages:
     - $ref: '#/channels/chat/messages/chat_notification_message'
+  handle_passthrough_user_joined_notification:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    description: Passthrough handler for UserJoinedNotification
+    summary: ''
+    messages:
+    - $ref: '#/channels/chat/messages/user_joined_notification'
+  handle_passthrough_user_left_notification:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    description: Passthrough handler for UserLeftNotification
+    summary: ''
+    messages:
+    - $ref: '#/channels/chat/messages/user_left_notification'
   reliable_chat_handle_ping:
     action: receive
     channel:
@@ -438,6 +458,12 @@ components:
     system_echo_message:
       payload:
         $ref: '#/components/schemas/SystemEchoMessage'
+    user_joined_notification:
+      payload:
+        $ref: '#/components/schemas/UserJoinedNotification'
+    user_left_notification:
+      payload:
+        $ref: '#/components/schemas/UserLeftNotification'
     user_message:
       payload:
         $ref: '#/components/schemas/UserMessage'
@@ -773,6 +799,34 @@ components:
       required:
       - payload
       title: SystemEchoMessage
+      type: object
+    UserJoinedNotification:
+      description: Notification when a user joins the chat.
+      properties:
+        action:
+          const: user_joined_notification
+          default: user_joined_notification
+          title: Action
+          type: string
+        payload:
+          $ref: '#/components/schemas/ChatPayload'
+      required:
+      - payload
+      title: UserJoinedNotification
+      type: object
+    UserLeftNotification:
+      description: Notification when a user leaves the chat.
+      properties:
+        action:
+          const: user_left_notification
+          default: user_left_notification
+          title: Action
+          type: string
+        payload:
+          $ref: '#/components/schemas/ChatPayload'
+      required:
+      - payload
+      title: UserLeftNotification
       type: object
     UserMessage:
       description: System message for direct communication.

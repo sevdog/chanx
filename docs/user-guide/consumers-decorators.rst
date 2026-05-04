@@ -247,6 +247,73 @@ This is more powerful than ``@ws_handler`` which only handles client messages.
 - **description** (str, optional): Detailed description for AsyncAPI
 - **tags** (list[str], optional): Tags for AsyncAPI grouping
 
+Passthrough Events
+------------------
+
+When you have events that should be forwarded directly to WebSocket clients without any processing, you can use ``passthrough_events`` instead of writing repetitive no-op handlers:
+
+**Before (repetitive):**
+
+.. code-block:: python
+
+    class ChatConsumer(AsyncJsonWebsocketConsumer):
+        @event_handler
+        async def handle_user_joined(self, event: UserJoinedNotification) -> UserJoinedNotification:
+            return event
+
+        @event_handler
+        async def handle_user_left(self, event: UserLeftNotification) -> UserLeftNotification:
+            return event
+
+        @event_handler
+        async def handle_message_updated(self, event: MessageUpdated) -> MessageUpdated:
+            return event
+
+**After (using passthrough_events):**
+
+.. code-block:: python
+
+    class ChatConsumer(AsyncJsonWebsocketConsumer):
+        passthrough_events = [UserJoinedNotification, UserLeftNotification, MessageUpdated]
+
+Each message type listed in ``passthrough_events`` automatically:
+
+- Creates a handler method named ``handle_passthrough_{snake_case_class_name}``
+- Registers the event type for incoming validation
+- Registers the same type as output (forwarded to client)
+- Generates an AsyncAPI ``send`` operation in the documentation
+
+**Mixing with explicit handlers:**
+
+You can combine ``passthrough_events`` with explicit ``@event_handler`` methods. Explicit handlers always take priority:
+
+.. code-block:: python
+
+    class ChatConsumer(AsyncJsonWebsocketConsumer):
+        passthrough_events = [UserJoinedNotification, UserLeftNotification]
+
+        # This explicit handler takes priority over passthrough for UserJoinedNotification
+        @event_handler
+        async def handle_user_joined(self, event: UserJoinedNotification) -> UserJoinedNotification:
+            log_user_joined(event)
+            return event
+
+**Customizing the method prefix:**
+
+By default, generated methods are named ``handle_passthrough_{snake_case_class_name}``. You can change this with ``passthrough_method_prefix``:
+
+.. code-block:: python
+
+    class ChatConsumer(AsyncJsonWebsocketConsumer):
+        passthrough_events = [UserJoinedNotification, UserLeftNotification]
+        passthrough_method_prefix = "forward_"
+
+        # Generated methods will be:
+        #   forward_user_joined_notification
+        #   forward_user_left_notification
+
+**Note:** ``passthrough_events`` only applies to event handlers (channel layer events), not WebSocket message handlers (``@ws_handler``). WebSocket messages from clients typically require processing logic, so passthrough is not supported for them.
+
 AsyncAPI Documentation Mapping
 -------------------------------
 

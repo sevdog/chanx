@@ -240,6 +240,129 @@ class TestEmptyConsumerRuntime:
         assert EventOnlyConsumer.incoming_event_adapter is not None
 
 
+class ACreated(BaseMessage):
+    action: Literal["a.created"] = "a.created"
+    payload: dict[str, Any]
+
+
+class AChanged(BaseMessage):
+    action: Literal["a.changed"] = "a.changed"
+    payload: dict[str, Any]
+
+
+class TestPassthroughEvents:
+    """Test the passthrough_events feature."""
+
+    def test_passthrough_registers_handler_info(self) -> None:
+        """Test that passthrough_events creates correct handler info entries."""
+
+        class PassthroughConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [ACreated, AChanged]
+
+        assert len(PassthroughConsumer._EVENT_HANDLER_INFO_MAP) == 2
+
+        handler_info = PassthroughConsumer._EVENT_HANDLER_INFO_MAP["a.created"]
+        assert handler_info["action"] == "handle_passthrough_a_created"
+        assert handler_info["message_action"] == "a.created"
+        assert handler_info["input_type"] == ACreated
+        assert handler_info["output_type"] == ACreated
+        assert handler_info["method_name"] == "handle_passthrough_a_created"
+        assert handler_info.get("description") == "Passthrough handler for ACreated"
+
+    @pytest.mark.asyncio
+    async def test_passthrough_handler_returns_event(self) -> None:
+        """Test that the generated passthrough handler returns the event unchanged."""
+
+        class PassthroughConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [ACreated]
+
+        consumer = PassthroughConsumer()
+        event = ACreated(payload={"id": 1})
+        handler = getattr(consumer, "handle_passthrough_a_created")
+        result = await handler(event)
+        assert result is event
+
+    def test_explicit_event_handler_takes_priority(self) -> None:
+        """Test that explicit @event_handler overrides passthrough for same type."""
+
+        class MixedConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [ACreated, AChanged]
+
+            @event_handler
+            async def handle_a_created(self, event: ACreated) -> ACreated:
+                return event
+
+        # ACreated should use the explicit handler, not passthrough
+        handler_info = MixedConsumer._EVENT_HANDLER_INFO_MAP["a.created"]
+        assert handler_info["method_name"] == "handle_a_created"
+
+        # AChanged should use passthrough
+        handler_info = MixedConsumer._EVENT_HANDLER_INFO_MAP["a.changed"]
+        assert handler_info["method_name"] == "handle_passthrough_a_changed"
+
+    def test_passthrough_builds_adapters(self) -> None:
+        """Test that passthrough events are included in both incoming and outgoing adapters."""
+
+        class PassthroughConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [ACreated, AChanged]
+
+        # Incoming event adapter
+        adapter = PassthroughConsumer.incoming_event_adapter
+        assert adapter is not None
+        assert isinstance(
+            adapter.validate_python({"action": "a.created", "payload": {"id": 1}}),
+            ACreated,
+        )
+        assert isinstance(
+            adapter.validate_python({"action": "a.changed", "payload": {"id": 2}}),
+            AChanged,
+        )
+
+        # Outgoing message adapter
+        assert isinstance(
+            PassthroughConsumer.outgoing_message_adapter.validate_python(
+                {"action": "a.created", "payload": {"id": 1}}
+            ),
+            ACreated,
+        )
+
+    def test_empty_passthrough_events(self) -> None:
+        """Test that empty passthrough_events list works fine."""
+
+        class EmptyPassthroughConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = []
+
+        assert EmptyPassthroughConsumer._EVENT_HANDLER_INFO_MAP == {}
+
+    def test_custom_passthrough_method_prefix(self) -> None:
+        """Test that passthrough_method_prefix can be overridden."""
+
+        class CustomPrefixConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [ACreated, AChanged]
+            passthrough_method_prefix = "forward_"
+
+        assert hasattr(CustomPrefixConsumer, "forward_a_created")
+        assert hasattr(CustomPrefixConsumer, "forward_a_changed")
+        assert not hasattr(CustomPrefixConsumer, "handle_passthrough_a_created")
+
+        handler_info = CustomPrefixConsumer._EVENT_HANDLER_INFO_MAP["a.created"]
+        assert handler_info["method_name"] == "forward_a_created"
+        assert handler_info["action"] == "forward_a_created"
+
+    def test_passthrough_events_validates_base_message_subclass(self) -> None:
+        """Test that non-BaseMessage types in passthrough_events raise TypeError."""
+
+        class NotAMessage:
+            pass
+
+        with pytest.raises(TypeError, match="must be a BaseMessage subclass"):
+
+            class InvalidConsumer(AsyncJsonWebsocketConsumer):
+                passthrough_events = [NotAMessage]  # type: ignore[list-item]
+
+            _ = InvalidConsumer  # used to trigger class creation above
+
+
 class TestWebsocketEdgeCases:
     """Test edge cases and error conditions in websocket functionality."""
 

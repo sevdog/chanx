@@ -26,9 +26,13 @@ from .messages import (
     ReliableChatPayload,
     SystemNotify,
     SystemPeriodicNotify,
+    UserJoinedNotification,
+    UserLeftNotification,
 )
 
-AllEvent = SystemNotify | ExtraRequestMessage
+AllEvent = (
+    SystemNotify | ExtraRequestMessage | UserJoinedNotification | UserLeftNotification
+)
 
 
 @channel(
@@ -44,6 +48,9 @@ class ChatConsumer(ExtraWsHandlerMixin, BaseConsumer[AllEvent]):
 
     groups = ["chat_room"]
     channel_layer_alias = "chat"
+
+    # Events that are forwarded directly to WebSocket clients without processing
+    passthrough_events = [UserJoinedNotification, UserLeftNotification]
 
     @ws_handler(
         summary="Handle ping requests",

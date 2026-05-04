@@ -7,6 +7,7 @@ authentication, group broadcasting, and channel event handling capabilities.
 """
 
 import asyncio
+import inspect
 import uuid
 from collections.abc import Callable, Collection, MutableMapping
 from functools import reduce
@@ -30,6 +31,7 @@ from typing_extensions import TypeVar
 from chanx.constants import COMPLETE_ACTIONS
 from chanx.core.authenticator import BaseAuthenticator
 from chanx.core.config import config
+from chanx.core.decorators import event_handler
 from chanx.core.registry import message_registry
 from chanx.messages.base import BaseMessage
 from chanx.messages.outgoing import (
@@ -65,6 +67,11 @@ class ChanxWebsocketConsumerMixin(Generic[ReceiveEvent]):
     discriminator_field: ClassVar[str] = (
         "action"  # Field used for message type discrimination
     )
+
+    # Passthrough events - list of BaseMessage subclasses that are automatically
+    # forwarded to the WebSocket client without any processing.
+    passthrough_events: ClassVar[list[type[BaseMessage]]] = []
+    passthrough_method_prefix: ClassVar[str] = "handle_passthrough_"
 
     # Internal handler registries - populated automatically by metaclass
     _MESSAGE_HANDLER_INFO_MAP: dict[str, AsyncAPIHandlerInfo] = (
@@ -134,6 +141,8 @@ class ChanxWebsocketConsumerMixin(Generic[ReceiveEvent]):
     def _process_handlers(cls) -> None:
         """
         Scan all methods in the class for handler decorators and process them.
+
+        Also processes passthrough_events to create synthetic event handlers.
         """
         # Scan all methods in the class (skip private/special attributes)
         for attr_name in dir(cls):
@@ -161,9 +170,58 @@ class ChanxWebsocketConsumerMixin(Generic[ReceiveEvent]):
                     event_handler_info
                 )
 
+        # Process passthrough events
+        cls._process_passthrough_events()
+
         # Register handler messages and build adapters
         cls._register_handler_messages()
         cls._build_adapters()
+
+    @classmethod
+    def _process_passthrough_events(cls) -> None:
+        """
+        Process passthrough_events to create synthetic event handlers.
+
+        For each message type in passthrough_events, creates a handler method
+        decorated with @event_handler that simply returns the event (forwarding
+        it to the WebSocket client).
+        Explicit @event_handler definitions take priority over passthrough.
+        """
+        for msg_type in cls.passthrough_events:
+            if not (
+                inspect.isclass(msg_type)
+                and issubclass(  # pyright: ignore[reportUnnecessaryIsInstance]
+                    msg_type, BaseMessage
+                )
+            ):
+                raise TypeError(
+                    f"passthrough_events item {msg_type} must be a BaseMessage subclass."
+                )
+            message_action = msg_type.model_fields["action"].default
+            # Explicit @event_handler takes priority
+            if message_action in cls._EVENT_HANDLER_INFO_MAP:
+                continue
+
+            method_name = (
+                f"{cls.passthrough_method_prefix}{humps.decamelize(msg_type.__name__)}"
+            )
+
+            async def method(self: Any, event: BaseMessage) -> BaseMessage:
+                """Passthrough handler that forwards the event unchanged."""
+                return event
+
+            method.__name__ = method_name
+            method.__qualname__ = f"{cls.__qualname__}.{method_name}"
+
+            decorated = event_handler(
+                method,
+                input_type=msg_type,
+                output_type=msg_type,
+                description=f"Passthrough handler for {msg_type.__name__}",
+            )
+            setattr(cls, method_name, decorated)
+            handler_info: AsyncAPIHandlerInfo = decorated._event_handler_info  # type: ignore[attr-defined]
+            cls._EVENT_HANDLER_INFO_MAP[message_action] = handler_info
 
     @classmethod
     def _register_handler_messages(cls) -> None:

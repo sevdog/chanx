@@ -584,9 +584,7 @@ class TestAsyncAPIGenerator:
             action: Literal["registration_complete"] = "registration_complete"
             payload: dict[str, Any]
 
-        from chanx.core.decorators import channel as channel_decorator
-
-        @channel_decorator(name="user_registration_channel", tags=["user_auth"])
+        @channel(name="user_registration_channel", tags=["user_auth"])
         class UserRegistrationConsumer(AsyncJsonWebsocketConsumer):
             @ws_handler
             async def handle_user_registration(
@@ -660,6 +658,112 @@ class TestAsyncAPIGenerator:
                     if p not in ["#", "channels", ""]
                 ]
                 assert all("_" not in p for p in parts)
+
+    def test_passthrough_events_generate_operations(self) -> None:
+        """Test that passthrough_events generate proper AsyncAPI operations."""
+
+        class PassthroughEvent(BaseMessage):
+            action: Literal["item_created"] = "item_created"
+            payload: str
+
+        class AnotherPassthroughEvent(BaseMessage):
+            action: Literal["item_deleted"] = "item_deleted"
+            payload: str
+
+        @channel(name="passthrough_channel")
+        class PassthroughConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [PassthroughEvent, AnotherPassthroughEvent]
+
+            @ws_handler
+            async def handle_test(self, message: DummyMessage) -> None:
+                pass
+
+        route = RouteInfo(
+            path="/ws/passthrough",
+            handler=Mock(),
+            base_url="ws://localhost:8000",
+            consumer=PassthroughConsumer,
+        )
+
+        generator = AsyncAPIGenerator([route])
+        spec = generator.generate()
+
+        # Should have operations for passthrough events
+        operations = spec["operations"]
+
+        # Passthrough events generate send operations
+        passthrough_ops = {
+            name: op for name, op in operations.items() if op["action"] == "send"
+        }
+        assert len(passthrough_ops) == 2
+
+        # Check each passthrough operation structure
+        for op in passthrough_ops.values():
+            assert op["action"] == "send"
+            assert op["channel"] == {"$ref": "#/channels/passthrough_channel"}
+            assert "messages" in op
+            assert len(op["messages"]) == 1
+
+        # Check operation names use handle_passthrough_ prefix
+        assert "handle_passthrough_passthrough_event" in operations
+        assert "handle_passthrough_another_passthrough_event" in operations
+
+        # Check description
+        op = operations["handle_passthrough_passthrough_event"]
+        assert op["description"] == "Passthrough handler for PassthroughEvent"
+
+        # Passthrough event messages should appear in channel messages
+        channel_spec = spec["channels"]["passthrough_channel"]
+        assert "passthrough_event" in channel_spec["messages"]
+        assert "another_passthrough_event" in channel_spec["messages"]
+
+        # Messages should be in components
+        assert "passthrough_event" in spec["components"]["messages"]
+        assert "another_passthrough_event" in spec["components"]["messages"]
+
+    def test_passthrough_events_with_explicit_handler_override(self) -> None:
+        """Test that explicit @event_handler overrides passthrough in AsyncAPI."""
+
+        class OverrideEvent(BaseMessage):
+            action: Literal["override_event"] = "override_event"
+            payload: str
+
+        class OverrideResponse(BaseMessage):
+            action: Literal["override_response"] = "override_response"
+            payload: str
+
+        class MixedConsumer(AsyncJsonWebsocketConsumer):
+            passthrough_events = [OverrideEvent]
+
+            @ws_handler
+            async def handle_test(self, message: DummyMessage) -> None:
+                pass
+
+            @event_handler
+            async def handle_override_event(
+                self, event: OverrideEvent
+            ) -> OverrideResponse:
+                return OverrideResponse(payload="custom")
+
+        route = RouteInfo(
+            path="/ws/mixed",
+            handler=Mock(),
+            base_url="ws://localhost:8000",
+            consumer=MixedConsumer,
+        )
+
+        generator = AsyncAPIGenerator([route])
+        spec = generator.generate()
+
+        # The explicit handler should win
+        send_ops = {
+            name: op
+            for name, op in spec["operations"].items()
+            if op["action"] == "send"
+        }
+        assert len(send_ops) == 1
+        # Should use the explicit handler's action name, not passthrough
+        assert "handle_override_event" in send_ops
 
 
 class TestAsyncAPIGeneratorIntegration:

@@ -94,3 +94,18 @@ class SystemNotify(BaseMessage):
 class SystemPeriodicNotify(BaseMessage):
     action: Literal["system_periodic_notify"] = "system_periodic_notify"
     payload: str
+
+
+# Passthrough event messages (forwarded directly to WebSocket clients)
+class UserJoinedNotification(BaseMessage):
+    """Notification when a user joins the chat."""
+
+    action: Literal["user_joined_notification"] = "user_joined_notification"
+    payload: ChatPayload
+
+
+class UserLeftNotification(BaseMessage):
+    """Notification when a user leaves the chat."""
+
+    action: Literal["user_left_notification"] = "user_left_notification"
+    payload: ChatPayload
