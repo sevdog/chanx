@@ -1,3 +1,9 @@
+## v2.7.0 (2026-05-04)
+
+### Feat
+
+- add passthrough_events for auto-forwarding channel events to WebSocket clients
+
 ## v2.6.2 (2026-04-17)
 
 ### Fix
