@@ -1,3 +1,9 @@
+## v2.7.1 (2026-05-08)
+
+### Fix
+
+- handle discriminated union schemas in registry and codegen
+
 ## v2.7.0 (2026-05-04)
 
 ### Feat
