@@ -189,20 +189,18 @@ class MessageRegistry:
 
     def _process_field_types(
         self, model_type_fields: dict[str, Any], consumer_name: str
-    ) -> tuple[set[str], dict[str, dict[int, type[BaseModel]]]]:
+    ) -> set[str]:
         """
-        Process field types and return ref_fields and union_map.
+        Process field types, register schemas, and return ref_fields.
 
         Args:
             model_type_fields: Dictionary of field names to types
             consumer_name: Name of the consumer
 
         Returns:
-            Tuple of (ref_fields, union_map) for schema processing
+            Set of field names that are direct BaseModel references
         """
-        """Process field types and return ref_fields and union_map."""
         ref_fields: set[str] = set()
-        union_map: dict[str, dict[int, type[BaseModel]]] = {}
 
         for f_name, f_type in model_type_fields.items():
             if isinstance(f_type, type) and issubclass(f_type, BaseModel):
@@ -210,37 +208,23 @@ class MessageRegistry:
                 ref_fields.add(f_name)
                 continue
 
-            union_mapping = self._process_union_field(f_type, consumer_name)
-            if union_mapping:
-                union_map[f_name] = union_mapping
+            self._process_union_field(f_type, consumer_name)
 
-        return ref_fields, union_map
+        return ref_fields
 
-    def _process_union_field(
-        self, f_type: Any, consumer_name: str
-    ) -> dict[int, type[BaseModel]] | None:
+    def _process_union_field(self, f_type: Any, consumer_name: str) -> None:
         """
-        Process a Union field type.
+        Process a Union field type, registering any BaseModel members as schemas.
 
         Args:
-            f_type: The union type to process
+            f_type: The field type to process
             consumer_name: Name of the consumer
-
-        Returns:
-            Mapping if it contains BaseModel types, None otherwise
         """
-        """Process a Union field type. Returns mapping if it contains BaseModel types."""
         orig = get_origin(f_type)
         if orig in UNION_TYPES:
-            mapping: dict[int, type[BaseModel]] = {}
-            has_model = False
-            for idx, item in enumerate(get_args(f_type)):
+            for item in get_args(f_type):
                 if isinstance(item, type) and issubclass(item, BaseModel):
                     self.build_message_schema(item, consumer_name)
-                    has_model = True
-                    mapping[idx] = item
-            return mapping if has_model else None
-        return None
 
     def _update_ref_recursively(
         self, obj: Any, defs_to_schemas: dict[str, str]
@@ -256,69 +240,61 @@ class MessageRegistry:
         """
         if isinstance(obj, dict):
             dict_obj = cast(dict[str, Any], obj)
-            if "$ref" in dict_obj:
-                ref = dict_obj["$ref"]
-                if isinstance(ref, str) and ref.startswith("#/$defs/"):
-                    schema_name = ref.replace("#/$defs/", "")
+            for key, value in dict_obj.items():
+                # Update $ref pointers and discriminator mapping values
+                if isinstance(value, str) and value.startswith("#/$defs/"):
+                    schema_name = value.replace("#/$defs/", "")
                     if schema_name in defs_to_schemas:
-                        dict_obj["$ref"] = defs_to_schemas[schema_name]
-            for value in dict_obj.values():
-                self._update_ref_recursively(value, defs_to_schemas)
+                        dict_obj[key] = defs_to_schemas[schema_name]
+                else:
+                    self._update_ref_recursively(value, defs_to_schemas)
         elif isinstance(obj, list):
             list_obj = cast(list[Any], obj)  # type: ignore[redundant-cast]
             for item in list_obj:
                 self._update_ref_recursively(item, defs_to_schemas)
 
-    def _update_schema_references(  # noqa: C901
+    def _update_schema_references(
         self,
         model_schema: dict[str, Any],
         ref_fields: set[str],
-        union_map: dict[str, dict[int, type[BaseModel]]],
         model_type_fields: dict[str, Any],
     ) -> None:
         """
         Update schema with proper references.
 
+        Extracts $defs as top-level schemas and recursively rewrites all
+        $ref pointers and discriminator mappings from #/$defs/... to
+        #/components/schemas/...
+
         Args:
             model_schema: The schema to update
-            ref_fields: Fields that need schema references
-            union_map: Map of union field references
+            ref_fields: Fields that are direct BaseModel references
             model_type_fields: Original field type mapping
         """
-        """Update schema with proper references."""
         # Process $defs first - extract and register them as separate schemas
         defs = model_schema.pop("$defs", None)
         defs_to_schemas: dict[str, str] = {}
 
         if defs:
             for def_name, _def_schema in defs.items():
-                # Register the def schema as a top-level schema
                 schema_ref = get_asyncapi_schema_ref(def_name)
                 defs_to_schemas[def_name] = schema_ref
 
-        # Update properties with explicit references
+        # Update properties with explicit references for direct BaseModel fields
         properties = model_schema["properties"]
 
         if ref_fields:
             for ref in ref_fields:
                 properties[ref] = {"$ref": self.schemas[model_type_fields[ref]]}
 
-        if union_map:
-            for ref_name, ref_map in union_map.items():
-                field = properties[ref_name]["anyOf"]
-                for idx, model in ref_map.items():
-                    field[idx]["$ref"] = self.schemas[model]
-
-        # Recursively update all remaining $ref pointers in the main schema
+        # Recursively update all $ref pointers and discriminator mappings
         self._update_ref_recursively(model_schema, defs_to_schemas)
 
         # Now update references in the extracted def schemas and store them
         if defs is not None:
             for def_name, def_schema in defs.items():
-                # Recursively update refs in the def schema itself
                 self._update_ref_recursively(def_schema, defs_to_schemas)
 
-                # Only store if not already present (avoid duplicates)
                 if def_name not in self.schema_objects:
                     self.schema_objects[def_name] = def_schema
 
@@ -355,14 +331,10 @@ class MessageRegistry:
 
         # Process field types
         model_type_fields = get_type_hints(concrete_type)
-        ref_fields, union_map = self._process_field_types(
-            model_type_fields, consumer_name
-        )
+        ref_fields = self._process_field_types(model_type_fields, consumer_name)
 
         # Update references
-        self._update_schema_references(
-            model_schema, ref_fields, union_map, model_type_fields
-        )
+        self._update_schema_references(model_schema, ref_fields, model_type_fields)
 
         # Store the schema
         self.schemas[concrete_type] = get_asyncapi_schema_ref(model_schema["title"])

@@ -29,19 +29,26 @@ def generate_pydantic_code(
     lines: list[str] = []
 
     # Check if Any type is needed
-    needs_any = any(
-        _schema_needs_any(schema)
-        for schema in schemas
-        if not (shared_schemas and schema in shared_schemas)
+    active_schemas = [
+        s for s in schemas if not (shared_schemas and s in shared_schemas)
+    ]
+    needs_any = any(_schema_needs_any(schema) for schema in active_schemas)
+    needs_discriminator = any(
+        _schema_needs_discriminator(schema) for schema in active_schemas
     )
 
     # Add imports
+    typing_imports = ["Literal"]
+    if needs_discriminator:
+        typing_imports.insert(0, "Annotated")
     if needs_any:
-        lines.append("from typing import Any, Literal")
-    else:
-        lines.append("from typing import Literal")
+        typing_imports.insert(0, "Any")
+    lines.append(f"from typing import {', '.join(typing_imports)}")
     lines.append("")
-    lines.append("from pydantic import BaseModel")
+    pydantic_imports = ["BaseModel"]
+    if needs_discriminator:
+        pydantic_imports.append("Field")
+    lines.append(f"from pydantic import {', '.join(pydantic_imports)}")
     lines.append("")
 
     if shared_schemas:
@@ -93,6 +100,52 @@ def _schema_needs_any(schema: SchemaObject) -> bool:
     return False
 
 
+def _get_discriminator_info(
+    field_schema: SchemaObject,
+) -> tuple[str, str] | None:
+    """
+    Extract discriminator info from a field schema.
+
+    Handles both direct (oneOf + discriminator) and nullable
+    (anyOf: [{oneOf + discriminator}, {type: null}]) patterns.
+
+    Returns:
+        (property_name, union_type_str) or None if no discriminator found.
+        union_type_str is the Python union type for the oneOf members only.
+    """
+    # Direct: field has oneOf + discriminator at top level
+    one_of = field_schema.oneOf
+    discriminator = field_schema.discriminator
+    if one_of and discriminator:
+        types = [t for opt in one_of if (t := _get_python_type(opt)) != "None"]
+        if types:
+            return discriminator["propertyName"], " | ".join(types)
+
+    # Nested: anyOf contains one sub-schema with oneOf + discriminator, plus null
+    any_of = field_schema.anyOf
+    if any_of:
+        for option in any_of:
+            nested_one_of = option.oneOf
+            nested_disc = option.discriminator
+            if nested_one_of and nested_disc:
+                types = [
+                    t for opt in nested_one_of if (t := _get_python_type(opt)) != "None"
+                ]
+                if types:
+                    return nested_disc["propertyName"], " | ".join(types)
+
+    return None
+
+
+def _schema_needs_discriminator(schema: SchemaObject) -> bool:
+    """Check if a schema has any field using a discriminated union."""
+    properties: dict[str, SchemaObject] = getattr(schema, "properties", {})
+    if not properties:
+        return False
+
+    return any(_get_discriminator_info(fs) is not None for fs in properties.values())
+
+
 def _generate_class(schema: SchemaObject) -> list[str]:
     """
     Generate a Pydantic BaseModel class from a schema.
@@ -123,6 +176,14 @@ def _generate_class(schema: SchemaObject) -> list[str]:
     for field_name, field_schema in properties.items():
         python_type = _get_python_type(field_schema)
         is_required = field_name in required
+
+        # Wrap with Annotated[..., Field(discriminator=...)] for discriminated unions
+        disc_info = _get_discriminator_info(field_schema)
+        if disc_info:
+            prop_name, union_type_str = disc_info
+            python_type = (
+                f'Annotated[{union_type_str}, Field(discriminator="{prop_name}")]'
+            )
 
         # Check for const value (for action fields)
         const_value = getattr(field_schema, "const", None)
@@ -203,6 +264,17 @@ def _get_python_type(schema: SchemaObject | None) -> str:
         # If only null, return None
         elif has_null:
             return "None"
+
+    # Check for oneOf (discriminated unions)
+    one_of: list[SchemaObject] | None = getattr(schema, "oneOf", None)
+    if one_of:
+        types = []
+        for option in one_of:
+            option_type = _get_python_type(option)
+            if option_type != "None":
+                types.append(option_type)
+        if types:
+            return " | ".join(types)
 
     # First check schema type (actual type)
     schema_type = getattr(schema, "type", None)

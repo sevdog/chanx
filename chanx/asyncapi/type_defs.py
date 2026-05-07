@@ -96,6 +96,9 @@ class SchemaObject(BaseModel):
     anyOf: list[SchemaObject] | None = None
     oneOf: list[SchemaObject] | None = None
 
+    # discriminator (for oneOf tagged unions)
+    discriminator: dict[str, Any] | None = None
+
     # JSON Schema keywords that are Python reserved words — use aliases for serialization
     not_: SchemaObject | None = Field(default=None, alias="not")
     if_: SchemaObject | None = Field(default=None, alias="if")

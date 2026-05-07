@@ -5,11 +5,11 @@ Tests the message registry functionality.
 """
 
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from chanx.core.registry import MessageRegistry
 from chanx.messages.base import BaseMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 
@@ -380,3 +380,153 @@ class TestMessageRegistry:
         # Both should be in the consumer messages
         assert DummyMessage in registry.consumer_messages["TestConsumer"]
         assert OtherDummyMessage in registry.consumer_messages["TestConsumer"]
+
+    def test_build_messages_with_discriminated_union(self) -> None:
+        """Test message with Pydantic discriminated union (oneOf schema)."""
+
+        class VariantA(BaseModel):
+            kind: Literal["a"] = "a"
+            value_a: str
+
+        class VariantB(BaseModel):
+            kind: Literal["b"] = "b"
+            value_b: int
+
+        class DiscriminatedPayload(BaseModel):
+            name: str
+            variant: Annotated[
+                VariantA | VariantB,
+                Field(discriminator="kind"),
+            ]
+
+        class DiscriminatedMessage(BaseMessage):
+            action: Literal["discriminated"] = "discriminated"
+            payload: DiscriminatedPayload
+
+        registry = MessageRegistry()
+        registry.add(DiscriminatedMessage, "TestConsumer")
+
+        # Should have registered the message and schemas
+        assert DiscriminatedMessage in registry.messages
+        assert DiscriminatedMessage in registry.schemas
+        assert DiscriminatedPayload in registry.schemas
+
+        # Variant sub-models should be extracted from $defs
+        assert "VariantA" in registry.schema_objects
+        assert "VariantB" in registry.schema_objects
+
+        # DiscriminatedPayload should have the variant field with oneOf
+        payload_schema = registry.schema_objects["DiscriminatedPayload"]
+        variant_field = payload_schema["properties"]["variant"]
+        assert "oneOf" in variant_field
+
+        # The $ref entries should point to components/schemas, not $defs
+        refs = [item["$ref"] for item in variant_field["oneOf"] if "$ref" in item]
+        assert "#/components/schemas/VariantA" in refs
+        assert "#/components/schemas/VariantB" in refs
+
+        # Verify no $defs references remain
+        schema_json = json.dumps(registry.schema_objects)
+        assert "#/$defs/" not in schema_json, "Found $defs references in schema"
+
+    def test_build_messages_with_nullable_discriminated_union(self) -> None:
+        """Test message with nullable discriminated union (anyOf[oneOf, null])."""
+
+        class VariantA(BaseModel):
+            kind: Literal["a"] = "a"
+            value_a: str
+
+        class VariantB(BaseModel):
+            kind: Literal["b"] = "b"
+            value_b: int
+
+        class NullableDiscriminatedPayload(BaseModel):
+            name: str
+            variant: (
+                Annotated[
+                    VariantA | VariantB,
+                    Field(discriminator="kind"),
+                ]
+                | None
+            ) = None
+
+        class NullableDiscriminatedMessage(BaseMessage):
+            action: Literal["nullable_disc"] = "nullable_disc"
+            payload: NullableDiscriminatedPayload
+
+        registry = MessageRegistry()
+        registry.add(NullableDiscriminatedMessage, "TestConsumer")
+
+        # Should not crash and should register schemas
+        assert NullableDiscriminatedMessage in registry.messages
+        assert "VariantA" in registry.schema_objects
+        assert "VariantB" in registry.schema_objects
+
+        # Pydantic wraps nullable discriminated unions as anyOf[{oneOf+disc}, null]
+        payload_schema = registry.schema_objects["NullableDiscriminatedPayload"]
+        variant_field = payload_schema["properties"]["variant"]
+        assert "anyOf" in variant_field
+
+        # First anyOf entry should have oneOf with discriminator
+        one_of_wrapper = variant_field["anyOf"][0]
+        assert "oneOf" in one_of_wrapper
+        assert "discriminator" in one_of_wrapper
+
+        # The $ref entries inside oneOf should point to components/schemas
+        refs = [item["$ref"] for item in one_of_wrapper["oneOf"] if "$ref" in item]
+        assert "#/components/schemas/VariantA" in refs
+        assert "#/components/schemas/VariantB" in refs
+
+        # discriminator mapping values should also point to components/schemas
+        mapping = one_of_wrapper["discriminator"]["mapping"]
+        assert mapping["a"] == "#/components/schemas/VariantA"
+        assert mapping["b"] == "#/components/schemas/VariantB"
+
+        # Second anyOf entry should be null
+        assert variant_field["anyOf"][1] == {"type": "null"}
+
+        # Verify no $defs references remain
+        schema_json = json.dumps(registry.schema_objects)
+        assert "#/$defs/" not in schema_json, "Found $defs references in schema"
+
+    def test_build_messages_with_discriminated_union_with_default(self) -> None:
+        """Test discriminated union with a default value."""
+
+        class ModeA(BaseModel):
+            mode: Literal["a"] = "a"
+
+        class ModeB(BaseModel):
+            mode: Literal["b"] = "b"
+            value: int
+
+        class DefaultDiscPayload(BaseModel):
+            name: str
+            mode: Annotated[
+                ModeA | ModeB,
+                Field(discriminator="mode"),
+            ] = ModeA()
+
+        class DefaultDiscMessage(BaseMessage):
+            action: Literal["default_disc"] = "default_disc"
+            payload: DefaultDiscPayload
+
+        registry = MessageRegistry()
+        registry.add(DefaultDiscMessage, "TestConsumer")
+
+        assert "ModeA" in registry.schema_objects
+        assert "ModeB" in registry.schema_objects
+
+        payload_schema = registry.schema_objects["DefaultDiscPayload"]
+        mode_field = payload_schema["properties"]["mode"]
+
+        # Non-nullable: oneOf + discriminator directly on the field
+        assert "oneOf" in mode_field
+        assert "discriminator" in mode_field
+        assert mode_field["default"] == {"mode": "a"}
+
+        refs = [item["$ref"] for item in mode_field["oneOf"] if "$ref" in item]
+        assert "#/components/schemas/ModeA" in refs
+        assert "#/components/schemas/ModeB" in refs
+
+        schema_json = json.dumps(registry.schema_objects)
+        assert "#/$defs/" not in schema_json
