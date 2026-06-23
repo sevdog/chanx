@@ -1,3 +1,9 @@
+## v2.8.0 (2026-06-23)
+
+### Feat
+
+- merge passthrough_events across the consumer inheritance chain
+
 ## v2.7.1 (2026-05-08)
 
 ### Fix
