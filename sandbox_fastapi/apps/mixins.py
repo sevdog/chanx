@@ -2,7 +2,7 @@
 Reusable handler mixins for chanx consumers.
 """
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from chanx.core.decorators import event_handler, ws_handler
 from chanx.messages.base import BaseMessage
@@ -29,6 +29,13 @@ class ExtraResponseMessage(BaseMessage):
     payload: str
 
 
+class ExtraPassthroughMessage(BaseMessage):
+    """Event forwarded straight to the client by a mixin's passthrough_events."""
+
+    action: Literal["extra_passthrough"] = "extra_passthrough"
+    payload: str
+
+
 class ExtraWsHandlerMixin:
     @ws_handler(
         summary="Handle extra request",
@@ -50,3 +57,9 @@ class ExtraEventHandlerMixin:
         self, event: ExtraEventMessage
     ) -> ExtraResponseMessage:
         return ExtraResponseMessage(payload=event.payload + " any extra thing")
+
+
+class ExtraPassthroughMixin:
+    """Mixin contributing a passthrough event merged into the consumer's own list."""
+
+    passthrough_events: ClassVar[list[type[BaseMessage]]] = [ExtraPassthroughMessage]

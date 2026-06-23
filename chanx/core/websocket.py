@@ -178,6 +178,26 @@ class ChanxWebsocketConsumerMixin(Generic[ReceiveEvent]):
         cls._build_adapters()
 
     @classmethod
+    def _collect_passthrough_events(cls) -> list[type[BaseMessage]]:
+        """
+        Collect passthrough_events from the entire MRO, deduplicated.
+
+        Each class in the inheritance chain (mixins included) may declare its own
+        ``passthrough_events``. Plain attribute access would only return the most
+        derived definition and shadow the rest, so we walk the MRO and merge every
+        class's own list. Order follows the MRO (most derived first); duplicates
+        keep their first occurrence.
+        """
+        merged: list[type[BaseMessage]] = []
+        seen: set[type[BaseMessage]] = set()
+        for klass in cls.__mro__:
+            for msg_type in klass.__dict__.get("passthrough_events", []):
+                if msg_type not in seen:
+                    seen.add(msg_type)
+                    merged.append(msg_type)
+        return merged
+
+    @classmethod
     def _process_passthrough_events(cls) -> None:
         """
         Process passthrough_events to create synthetic event handlers.
@@ -187,7 +207,7 @@ class ChanxWebsocketConsumerMixin(Generic[ReceiveEvent]):
         it to the WebSocket client).
         Explicit @event_handler definitions take priority over passthrough.
         """
-        for msg_type in cls.passthrough_events:
+        for msg_type in cls._collect_passthrough_events():
             if not (
                 inspect.isclass(msg_type)
                 and issubclass(  # pyright: ignore[reportUnnecessaryIsInstance]

@@ -312,6 +312,24 @@ By default, generated methods are named ``handle_passthrough_{snake_case_class_n
         #   forward_user_joined_notification
         #   forward_user_left_notification
 
+**Sharing passthrough events via mixins:**
+
+``passthrough_events`` declared anywhere in the inheritance chain are merged together, just like ``@event_handler`` and ``@ws_handler`` methods. A mixin can contribute its own passthrough events, and the consumer's own list is added on top — the concrete class does **not** shadow the mixin's events:
+
+.. code-block:: python
+
+    class PresenceMixin:
+        passthrough_events = [UserJoinedNotification, UserLeftNotification]
+
+    class ChatConsumer(PresenceMixin, AsyncJsonWebsocketConsumer):
+        passthrough_events = [MessageUpdated]
+
+    # ChatConsumer forwards all three:
+    #   UserJoinedNotification, UserLeftNotification (from the mixin)
+    #   MessageUpdated (from the consumer)
+
+Duplicate types across the chain are de-duplicated. Because the lists are merged additively, a subclass cannot *remove* a passthrough event contributed by a base class or mixin — this mirrors how inherited handler methods cannot be un-inherited.
+
 **Note:** ``passthrough_events`` only applies to event handlers (channel layer events), not WebSocket message handlers (``@ws_handler``). WebSocket messages from clients typically require processing logic, so passthrough is not supported for them.
 
 AsyncAPI Documentation Mapping

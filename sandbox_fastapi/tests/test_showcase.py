@@ -6,7 +6,11 @@ from chanx.fast_channels.testing import WebsocketCommunicator
 from chanx.messages.incoming import PingMessage
 from chanx.messages.outgoing import PongMessage
 
-from sandbox_fastapi.apps.mixins import ExtraRequestMessage, ExtraResponseMessage
+from sandbox_fastapi.apps.mixins import (
+    ExtraPassthroughMessage,
+    ExtraRequestMessage,
+    ExtraResponseMessage,
+)
 from sandbox_fastapi.apps.showcase.consumer import (
     AnalyticsConsumer,
     ChatConsumer,
@@ -387,3 +391,23 @@ async def test_chat_consumer_passthrough_multiple_events() -> None:
         replies = await comm.receive_all_messages(stop_action=EVENT_ACTION_COMPLETE)
         assert len(replies) == 1
         assert cast(UserLeftNotification, replies[0]).payload.message == "Alice left"
+
+
+@pytest.mark.asyncio
+async def test_chat_consumer_passthrough_from_mixin() -> None:
+    """Test that a passthrough event contributed by a mixin is forwarded to client."""
+    async with WebsocketCommunicator(app, "/ws/chat", consumer=ChatConsumer) as comm:
+        # Skip join message
+        await comm.receive_all_messages(stop_action=GROUP_ACTION_COMPLETE)
+
+        # ExtraPassthroughMessage comes from ExtraPassthroughMixin, not ChatConsumer's
+        # own passthrough_events — proves the two lists are merged across the MRO.
+        await ChatConsumer.broadcast_event(
+            ExtraPassthroughMessage(payload="from mixin")
+        )
+
+        replies = await comm.receive_all_messages(stop_action=EVENT_ACTION_COMPLETE)
+        assert len(replies) == 1
+        reply = cast(ExtraPassthroughMessage, replies[0])
+        assert reply.action == "extra_passthrough"
+        assert reply.payload == "from mixin"

@@ -17,6 +17,8 @@ channels:
         $ref: '#/components/messages/chat_message'
       chat_notification_message:
         $ref: '#/components/messages/chat_notification_message'
+      extra_passthrough_message:
+        $ref: '#/components/messages/extra_passthrough_message'
       extra_request_message:
         $ref: '#/components/messages/extra_request_message'
       extra_response_message:
@@ -201,6 +203,14 @@ operations:
     summary: ''
     messages:
     - $ref: '#/channels/chat/messages/user_left_notification'
+  handle_passthrough_extra_passthrough_message:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    description: Passthrough handler for ExtraPassthroughMessage
+    summary: ''
+    messages:
+    - $ref: '#/channels/chat/messages/extra_passthrough_message'
   reliable_chat_handle_ping:
     action: receive
     channel:
@@ -419,6 +429,9 @@ components:
     chat_notification_message:
       payload:
         $ref: '#/components/schemas/ChatNotificationMessage'
+    extra_passthrough_message:
+      payload:
+        $ref: '#/components/schemas/ExtraPassthroughMessage'
     extra_request_message:
       payload:
         $ref: '#/components/schemas/ExtraRequestMessage'
@@ -544,6 +557,21 @@ components:
       required:
       - message
       title: ChatPayload
+      type: object
+    ExtraPassthroughMessage:
+      description: Event forwarded straight to the client by a mixin's passthrough_events.
+      properties:
+        action:
+          const: extra_passthrough
+          default: extra_passthrough
+          title: Action
+          type: string
+        payload:
+          title: Payload
+          type: string
+      required:
+      - payload
+      title: ExtraPassthroughMessage
       type: object
     ExtraRequestMessage:
       description: Extra request message for ws handler mixin.

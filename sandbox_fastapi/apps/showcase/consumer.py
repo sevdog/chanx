@@ -10,7 +10,12 @@ from chanx.messages.outgoing import PongMessage
 from fast_channels.type_defs import WebSocketDisconnectEvent
 from sandbox_fastapi.base_consumer import BaseConsumer
 
-from ..mixins import ExtraRequestMessage, ExtraWsHandlerMixin
+from ..mixins import (
+    ExtraPassthroughMessage,
+    ExtraPassthroughMixin,
+    ExtraRequestMessage,
+    ExtraWsHandlerMixin,
+)
 from .messages import (
     AnalyticsMessage,
     AnalyticsNotificationMessage,
@@ -31,7 +36,11 @@ from .messages import (
 )
 
 AllEvent = (
-    SystemNotify | ExtraRequestMessage | UserJoinedNotification | UserLeftNotification
+    SystemNotify
+    | ExtraRequestMessage
+    | UserJoinedNotification
+    | UserLeftNotification
+    | ExtraPassthroughMessage
 )
 
 
@@ -40,7 +49,7 @@ AllEvent = (
     description="Basic Chat Consumer using centralized chat layer",
     tags=["chat", "showcase"],
 )
-class ChatConsumer(ExtraWsHandlerMixin, BaseConsumer[AllEvent]):
+class ChatConsumer(ExtraWsHandlerMixin, ExtraPassthroughMixin, BaseConsumer[AllEvent]):
     """
     Chat consumer using the centralized chat layer.
     Migrated to use chanx framework.
@@ -49,7 +58,8 @@ class ChatConsumer(ExtraWsHandlerMixin, BaseConsumer[AllEvent]):
     groups = ["chat_room"]
     channel_layer_alias = "chat"
 
-    # Events that are forwarded directly to WebSocket clients without processing
+    # Events forwarded directly to WebSocket clients without processing. These are
+    # merged with ExtraPassthroughMixin.passthrough_events (ExtraPassthroughMessage).
     passthrough_events = [UserJoinedNotification, UserLeftNotification]
 
     @ws_handler(

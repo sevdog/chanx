@@ -5,7 +5,7 @@ Tests the framework-agnostic parts of AsyncJsonWebsocketConsumer
 including message processing, type adapter building, and handler routing.
 """
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -348,6 +348,37 @@ class TestPassthroughEvents:
         handler_info = CustomPrefixConsumer._EVENT_HANDLER_INFO_MAP["a.created"]
         assert handler_info["method_name"] == "forward_a_created"
         assert handler_info["action"] == "forward_a_created"
+
+    def test_passthrough_events_merge_across_mro(self) -> None:
+        """Test that passthrough_events from mixins and the consumer are merged."""
+
+        class PassthroughMixin:
+            passthrough_events: ClassVar[list[type[BaseMessage]]] = [ACreated]
+
+        class MergedConsumer(PassthroughMixin, AsyncJsonWebsocketConsumer):  # type: ignore[misc]
+            passthrough_events = [AChanged]
+
+        # Both the mixin's and the consumer's passthrough events are present.
+        assert set(MergedConsumer._EVENT_HANDLER_INFO_MAP) == {"a.created", "a.changed"}
+        assert (
+            MergedConsumer._EVENT_HANDLER_INFO_MAP["a.created"]["method_name"]
+            == "handle_passthrough_a_created"
+        )
+        assert (
+            MergedConsumer._EVENT_HANDLER_INFO_MAP["a.changed"]["method_name"]
+            == "handle_passthrough_a_changed"
+        )
+
+    def test_passthrough_events_merge_dedupes(self) -> None:
+        """Test that a type declared in both mixin and consumer is not duplicated."""
+
+        class PassthroughMixin:
+            passthrough_events: ClassVar[list[type[BaseMessage]]] = [ACreated, AChanged]
+
+        class MergedConsumer(PassthroughMixin, AsyncJsonWebsocketConsumer):  # type: ignore[misc]
+            passthrough_events = [ACreated]
+
+        assert set(MergedConsumer._EVENT_HANDLER_INFO_MAP) == {"a.created", "a.changed"}
 
     def test_passthrough_events_validates_base_message_subclass(self) -> None:
         """Test that non-BaseMessage types in passthrough_events raise TypeError."""
